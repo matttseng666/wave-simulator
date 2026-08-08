@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>互動式行進波模擬器</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif;
+    background: #111827;
+    color: #f9fafb;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  h1 { margin: 0 0 8px; font-size: clamp(24px, 4vw, 40px); }
+  p { color: #cbd5e1; line-height: 1.6; }
+  .panel {
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: 0 12px 30px rgba(0,0,0,.25);
+  }
+  canvas {
+    width: 100%;
+    height: auto;
+    display: block;
+    background: white;
+    border-radius: 12px;
+    touch-action: none;
+  }
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 14px;
+    margin-top: 16px;
+  }
+  .control {
+    background: #111827;
+    border: 1px solid #374151;
+    border-radius: 12px;
+    padding: 12px;
+  }
+  label { display: flex; justify-content: space-between; gap: 12px; font-weight: 650; }
+  input[type="range"] { width: 100%; margin-top: 10px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  button {
+    border: 0;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .primary { background: #2563eb; color: white; }
+  .secondary { background: #374151; color: white; }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin: 14px 0 0;
+  }
+  .stat {
+    background: #0f172a;
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+  .stat small { color: #94a3b8; display: block; }
+  .stat strong { font-size: 18px; }
+  code { color: #bfdbfe; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>互動式行進波／波包模擬器</h1>
+  <p>
+    模型：<code>y(x,t)=A·exp(-((x-vt-x₀)/σ)²)·sin(k(x-vt-x₀))</code>，
+    其中 <code>k=2π/λ</code>、<code>ω=vk</code>。
+  </p>
+
+  <div class="panel">
+    <canvas id="wave" width="1000" height="500"></canvas>
+
+    <div class="buttons">
+      <button id="play" class="primary">▶ 播放</button>
+      <button id="reset" class="secondary">↺ 重設</button>
+      <button id="step" class="secondary">單步前進</button>
+    </div>
+
+    <div class="controls">
+      <div class="control">
+        <label>時間 t <span id="timeOut"></span></label>
+        <input id="time" type="range" min="0" max="25" step="0.01" value="0">
+      </div>
+      <div class="control">
+        <label>波長 λ <span id="lambdaOut"></span></label>
+        <input id="lambda" type="range" min="5" max="50" step="0.5" value="20">
+      </div>
+      <div class="control">
+        <label>波速 v <span id="speedOut"></span></label>
+        <input id="speed" type="range" min="0.5" max="10" step="0.1" value="4">
+      </div>
+      <div class="control">
+        <label>振幅 A <span id="ampOut"></span></label>
+        <input id="amp" type="range" min="0.2" max="2" step="0.05" value="1">
+      </div>
+      <div class="control">
+        <label>波包寬度 σ <span id="sigmaOut"></span></label>
+        <input id="sigma" type="range" min="4" max="30" step="0.5" value="12">
+      </div>
+      <div class="control">
+        <label>初始中心 x₀ <span id="x0Out"></span></label>
+        <input id="x0" type="range" min="-20" max="20" step="1" value="0">
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><small>波數 k = 2π/λ</small><strong id="kOut"></strong></div>
+      <div class="stat"><small>角頻率 ω = vk</small><strong id="omegaOut"></strong></div>
+      <div class="stat"><small>頻率 f = v/λ</small><strong id="freqOut"></strong></div>
+      <div class="stat"><small>週期 T = λ/v</small><strong id="periodOut"></strong></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById("wave");
+const ctx = canvas.getContext("2d");
+
+const els = {
+  time: document.getElementById("time"),
+  lambda: document.getElementById("lambda"),
+  speed: document.getElementById("speed"),
+  amp: document.getElementById("amp"),
+  sigma: document.getElementById("sigma"),
+  x0: document.getElementById("x0")
+};
+
+let running = false;
+let last = performance.now();
+
+function p() {
+  const t = +els.time.value;
+  const lambda = +els.lambda.value;
+  const v = +els.speed.value;
+  const A = +els.amp.value;
+  const sigma = +els.sigma.value;
+  const x0 = +els.x0.value;
+  const k = 2 * Math.PI / lambda;
+  const omega = v * k;
+  return {t, lambda, v, A, sigma, x0, k, omega};
+}
+
+function waveY(x, q) {
+  const z = x - q.v*q.t - q.x0;
+  return q.A * Math.exp(-Math.pow(z/q.sigma, 2)) * Math.sin(q.k*z);
+}
+
+function xToPx(x) {
+  return (x + 30) / 140 * canvas.width;
+}
+function yToPx(y, A) {
+  const range = 1.35 * Math.max(A, 1);
+  return canvas.height/2 - y/range * (canvas.height*0.42);
+}
+
+function drawAxes(q) {
+  ctx.strokeStyle = "#111827";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, canvas.height/2);
+  ctx.lineTo(canvas.width, canvas.height/2);
+  ctx.moveTo(xToPx(0), 0);
+  ctx.lineTo(xToPx(0), canvas.height);
+  ctx.stroke();
+
+  ctx.font = "18px system-ui";
+  ctx.fillStyle = "#111827";
+  ctx.textAlign = "center";
+  for (let x= -20; x<=100; x+=10) {
+    const px = xToPx(x);
+    ctx.beginPath();
+    ctx.moveTo(px, canvas.height/2 - 6);
+    ctx.lineTo(px, canvas.height/2 + 6);
+    ctx.stroke();
+    if (x % 20 === 0) ctx.fillText(String(x), px, canvas.height/2 + 28);
+  }
+}
+
+function draw() {
+  const q = p();
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  drawAxes(q);
+
+  ctx.strokeStyle = "#334155";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  for (let i=0; i<=canvas.width; i++) {
+    const x = -30 + 140*i/canvas.width;
+    const y = waveY(x,q);
+    const py = yToPx(y,q.A);
+    if (i===0) ctx.moveTo(i,py); else ctx.lineTo(i,py);
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = "#ef4444";
+  for (let x=0; x<=100; x+=10) {
+    const y = waveY(x,q);
+    ctx.beginPath();
+    ctx.arc(xToPx(x), yToPx(y,q.A), 6, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  document.getElementById("timeOut").textContent = q.t.toFixed(2);
+  document.getElementById("lambdaOut").textContent = q.lambda.toFixed(1);
+  document.getElementById("speedOut").textContent = q.v.toFixed(1);
+  document.getElementById("ampOut").textContent = q.A.toFixed(2);
+  document.getElementById("sigmaOut").textContent = q.sigma.toFixed(1);
+  document.getElementById("x0Out").textContent = q.x0.toFixed(0);
+
+  document.getElementById("kOut").textContent = q.k.toFixed(4);
+  document.getElementById("omegaOut").textContent = q.omega.toFixed(4);
+  document.getElementById("freqOut").textContent = (q.v/q.lambda).toFixed(4);
+  document.getElementById("periodOut").textContent = (q.lambda/q.v).toFixed(4);
+}
+
+function animate(now) {
+  const dt = (now-last)/1000;
+  last = now;
+  if (running) {
+    let t = +els.time.value + dt;
+    if (t > +els.time.max) t = 0;
+    els.time.value = t;
+  }
+  draw();
+  requestAnimationFrame(animate);
+}
+
+document.getElementById("play").addEventListener("click", () => {
+  running = !running;
+  document.getElementById("play").textContent = running ? "⏸ 暫停" : "▶ 播放";
+});
+
+document.getElementById("reset").addEventListener("click", () => {
+  Object.assign(els.time, {value: 0});
+  Object.assign(els.lambda, {value: 20});
+  Object.assign(els.speed, {value: 4});
+  Object.assign(els.amp, {value: 1});
+  Object.assign(els.sigma, {value: 12});
+  Object.assign(els.x0, {value: 0});
+  running = false;
+  document.getElementById("play").textContent = "▶ 播放";
+  draw();
+});
+
+document.getElementById("step").addEventListener("click", () => {
+  let t = +els.time.value + 0.1;
+  if (t > +els.time.max) t = 0;
+  els.time.value = t;
+  draw();
+});
+
+Object.values(els).forEach(el => el.addEventListener("input", draw));
+
+draw();
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
